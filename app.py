@@ -153,6 +153,10 @@ def gerar_pdf():
 @app.route('/api/contador')
 def contador():
     return jsonify(carregar_contador())
+    
+@app.route('/')
+def home():
+    return "API do Mapa Astral está no ar! Use /api/mapa para enviar dados."
 
 import os
 
