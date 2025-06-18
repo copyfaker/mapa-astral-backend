@@ -1,0 +1,7 @@
+flask
+flask-cors
+pyswisseph==2.10.00.0
+geopy
+pytz
+timezonefinder
+reportlab
