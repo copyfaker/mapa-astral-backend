@@ -1,21 +1,20 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import pyswisseph as swe
-import datetime
-import pytz
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
-import os
+from skyfield.api import load, Topos
+from skyfield.almanac import find_discrete, risings_and_settings
+from datetime import datetime, timedelta
+import pytz
 import json
+import os
 from reportlab.pdfgen import canvas
 from io import BytesIO
 
 app = Flask(__name__)
 CORS(app)
 
-swe.set_ephe_path('.')
 contador_arquivo = 'contador.json'
-
 if not os.path.exists(contador_arquivo):
     with open(contador_arquivo, 'w') as f:
         json.dump({'total': 0}, f)
@@ -39,7 +38,7 @@ signos = [
 ]
 
 def get_signo(graus):
-    return signos[int(graus / 30)]
+    return signos[int(graus // 30) % 12]
 
 interpretacoes = {
     "Sol": {
@@ -61,15 +60,19 @@ interpretacoes = {
 @app.route('/api/mapa', methods=['POST'])
 def gerar_mapa():
     dados = request.get_json()
-    nome = dados['nome']
-    data = dados['data']
-    hora = dados['hora']
-    cidade = dados['cidade']
-    pais = dados['pais']
+    nome = dados.get('nome', 'Sem nome')
+    data_str = dados.get('data')  # formato dd/mm/yyyy
+    hora_str = dados.get('hora')  # formato hh:mm
+    cidade = dados.get('cidade')
+    pais = dados.get('pais')
 
-    dia, mes, ano = map(int, data.split("/"))
-    hora, minuto = map(int, hora.split(":"))
+    if not (data_str and hora_str and cidade and pais):
+        return jsonify({'erro': 'Faltando dados necessários'}), 400
 
+    dia, mes, ano = map(int, data_str.split("/"))
+    hora, minuto = map(int, hora_str.split(":"))
+
+    # Obter coordenadas da cidade
     geo = Nominatim(user_agent="mapa-astral")
     loc = geo.geocode(f"{cidade}, {pais}")
     if not loc:
@@ -77,33 +80,44 @@ def gerar_mapa():
 
     lat, lon = loc.latitude, loc.longitude
     tf = TimezoneFinder()
-    tz = pytz.timezone(tf.timezone_at(lng=lon, lat=lat))
-    dt_local = datetime.datetime(ano, mes, dia, hora, minuto)
+    tzname = tf.timezone_at(lng=lon, lat=lat)
+    if not tzname:
+        return jsonify({'erro': 'Fuso horário não encontrado'}), 400
+    tz = pytz.timezone(tzname)
+
+    dt_local = datetime(ano, mes, dia, hora, minuto)
+    dt_local = tz.localize(dt_local)
     dt_utc = dt_local.astimezone(pytz.utc)
 
-    jd = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day,
-                    dt_utc.hour + dt_utc.minute / 60)
+    ts = load.timescale()
+    t = ts.from_datetime(dt_utc)
+
+    eph = load('de421.bsp')
 
     planetas = {
-        "Sol": swe.SUN,
-        "Lua": swe.MOON,
-        "Mercúrio": swe.MERCURY,
-        "Vênus": swe.VENUS,
-        "Marte": swe.MARS,
-        "Júpiter": swe.JUPITER,
-        "Saturno": swe.SATURN,
-        "Urano": swe.URANUS,
-        "Netuno": swe.NEPTUNE,
-        "Plutão": swe.PLUTO
+        "Sol": eph['sun'],
+        "Lua": eph['moon'],
+        "Mercúrio": eph['mercury'],
+        "Vênus": eph['venus'],
+        "Marte": eph['mars'],
+        "Júpiter": eph['jupiter barycenter'],
+        "Saturno": eph['saturn barycenter'],
+        "Urano": eph['uranus barycenter'],
+        "Netuno": eph['neptune barycenter'],
+        "Plutão": eph['pluto barycenter']
     }
 
+    terra = eph['earth']
     resultado = []
-    for nome_planeta, cod in planetas.items():
-        pos, _ = swe.calc_ut(jd, cod)
-        signo = get_signo(pos[0])
-        grau = pos[0] % 30
+
+    for nome_planeta, planeta in planetas.items():
+        astrometric = terra.at(t).observe(planeta)
+        ecl_lon, ecl_lat, distance = astrometric.ecliptic_latlon()
+        graus = ecl_lon.degrees % 360
+        signo = get_signo(graus)
+        grau_signo = graus % 30
         interpretacao = interpretacoes.get(nome_planeta, {}).get(signo, "Em breve.")
-        resultado.append(f"{nome_planeta}: {grau:.2f}° de {signo} — {interpretacao}")
+        resultado.append(f"{nome_planeta}: {grau_signo:.2f}° de {signo} — {interpretacao}")
 
     acessos = atualizar_contador()
 
