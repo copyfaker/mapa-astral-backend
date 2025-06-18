@@ -1,6 +1,6 @@
 flask
 flask-cors
-pyswisseph==2.10.3.0
+pyswisseph==2.10.3.1
 geopy
 pytz
 timezonefinder
