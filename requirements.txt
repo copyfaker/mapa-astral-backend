@@ -1,6 +1,7 @@
 flask
 flask-cors
 flatlib
+swisseph
 geopy
 pytz
 timezonefinder
